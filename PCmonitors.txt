@@ -1,0 +1,99 @@
+#define N 5
+#define emptyC(C) (len(C.q) == 0)
+
+typedef Condition{
+	chan q;
+}
+
+typedef RWmonitor{
+	byte buffer[N];	
+	Condition notEmpty,notFull;
+}
+bool lock = false;
+int count = 0;
+byte data;
+byte tProc;
+
+chan tmpE = [1] of {byte};
+chan tmpF = [1] of {byte};
+
+RWmonitor rw;
+bool enterProducer;
+bool enterConsumer;
+
+inline enterMon(){
+	atomic{
+		!lock;
+		lock = true;
+	}
+}
+
+inline leaveMon(){
+	lock = false;
+}
+
+inline waitC(C){
+	atomic{
+		C.q!_pid;
+		lock = false;
+		!(C.q??[eval(_pid)])
+	}
+}
+
+inline signalC(C){
+	atomic{
+		if
+		::(!emptyC(C))->
+			C.q?tProc;
+			!lock;
+			lock = true;
+		::else;
+		fi;
+	}
+}
+inline append(data){
+	enterMon();
+	if
+	::count == N ->
+		waitC(rw.notFull)
+	::else;
+	fi;
+	printf("produce()"); 
+	rw.buffer[count] = data;
+	count++;
+	signalC(rw.notEmpty);
+	leaveMon();
+}
+inline take(){
+	enterMon();
+	byte w;
+	if
+	::count == 0 ->
+		waitC(rw.notEmpty)
+	::else;
+	fi;
+	w = rw.buffer[count-1];
+	rw.buffer[count-1] = 0;
+	printf("consume()");
+	count--;
+	signalC(rw.notFull);
+	leaveMon();
+}
+proctype producer() {
+	byte d = 1;
+	do
+	::(d == 1) -> append(d);
+	od;
+}
+
+proctype consumer() {
+	do
+	::take();
+	od;
+}
+init{
+	rw.notEmpty.q = tmpE;
+	rw.notFull.q = tmpF;
+	atomic{run producer() priority 3;
+		run consumer() priority 2;}
+}
